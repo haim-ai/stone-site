@@ -186,6 +186,13 @@ const FRAMES = 145;                 // per clip
 const PAD = 3;                       // zero-pad width => frame_001
 const DURATION = 5000;              // 5s linear transition per requirement
 const EXT = 'webp';
+// Looping background clips, keyed by section index. While you rest on the section
+// they loop continuously (without locking input). Used for section 4 and the end.
+const LOOPS = {
+  1: { folder:'loop2',  frames:96, duration:4000 },   // section 2
+  3: { folder:'loop4',  frames:73, duration:3200 },   // section 4
+  4: { folder:'finale', frames:73, duration:3200 },   // section 5 (the end)
+};
 
 /* ============================================================
    DOM
@@ -246,6 +253,39 @@ function loadVideo(vi){
 function restClip(s){ return Math.min(s, VIDEOS.length-1); }
 function restFrame(s){ return s < VIDEOS.length ? 0 : FRAMES-1; }
 function restImg(s){ return store[restClip(s)][restFrame(s)]; }
+
+// Looping clips (separate from the section clips). Each loops continuously while
+// you rest on its section, and does NOT lock input — navigating away cancels it.
+Object.values(LOOPS).forEach(L=>{ L.store = new Array(L.frames).fill(null); L.loaded = 0; });
+function loopReady(L){ return L.loaded >= L.frames; }
+function loadLoop(L){
+  return L._p || (L._p = new Promise(resolve=>{
+    let done = 0;
+    for (let f=0; f<L.frames; f++){
+      const img = new Image(); img.decoding = 'async';
+      img.onload = img.onerror = ()=>{ L.store[f]=img; done++; L.loaded=done; if (done===L.frames) resolve(); };
+      img.src = `frames/${L.folder}/frame_${String(f+1).padStart(PAD,'0')}.${EXT}`;
+    }
+  }));
+}
+let loopActive = false, loopRAF = 0;
+function playLoop(idx){
+  const L = LOOPS[idx]; if (!L) return;
+  if (!loopReady(L)){ loadLoop(L).then(()=>{ if (current===idx && !loopActive) playLoop(idx); }); return; }
+  loopActive = true;
+  let t0 = null;
+  function step(ts){
+    if (!loopActive) return;
+    if (t0===null) t0 = ts;
+    const p = ((ts - t0) / L.duration) % 1;               // 0..1, loops forever
+    const fi = Math.min(L.frames-1, Math.floor(p*L.frames));
+    ctx.fillStyle='#000'; ctx.fillRect(0,0,vw,vh);
+    paint(L.store[fi] || L.store[0], 1);
+    loopRAF = requestAnimationFrame(step);
+  }
+  loopRAF = requestAnimationFrame(step);
+}
+function cancelLoop(){ if (!loopActive) return; loopActive=false; cancelAnimationFrame(loopRAF); }
 
 /* ============================================================
    CANVAS DRAW (cover-fit, DPR aware)
@@ -345,10 +385,11 @@ function goTo(dest){
     if (p<1){ requestAnimationFrame(step); }
     else {
       current = dest;
-      draw();                             // rest on the destination's poster frame
       busy = false;
       if (railBar) railBar.style.width='0%';
-      checkPending();
+      draw();
+      if (LOOPS[dest] && pending===null) playLoop(dest);   // section 4 / end -> loop
+      else checkPending();
     }
   }
   requestAnimationFrame(step);
@@ -360,8 +401,13 @@ function goTo(dest){
 let wheelLock = false;
 function onWheel(e){
   e.preventDefault();
-  if (busy || wheelLock) return;
   if (Math.abs(e.deltaY) < 4) return;
+  if (loopActive){                                  // resting on a looping section
+    const target = current + (e.deltaY > 0 ? 1 : -1);
+    if (target < 0 || target >= SECTIONS.length) return;   // nowhere to go: keep looping
+    cancelLoop();                                   // navigating away: stop the loop
+  }
+  if (busy || wheelLock) return;
   wheelLock = true;
   setTimeout(()=> wheelLock=false, 220);     // collapse a burst into one tick
   if (e.deltaY > 0) goTo(current+1);
@@ -371,18 +417,34 @@ window.addEventListener('wheel', onWheel, { passive:false });
 
 /* keyboard */
 window.addEventListener('keydown', e=>{
+  const down = (e.key==='ArrowDown'||e.key==='PageDown'||e.key===' ');
+  const up = (e.key==='ArrowUp'||e.key==='PageUp');
+  if (!down && !up) return;
+  if (loopActive){
+    const target = current + (down ? 1 : -1);
+    if (target < 0 || target >= SECTIONS.length) return;
+    cancelLoop();
+  }
   if (busy) return;
-  if (e.key==='ArrowDown'||e.key==='PageDown'||e.key===' ') { e.preventDefault(); goTo(current+1); }
-  if (e.key==='ArrowUp'||e.key==='PageUp') { e.preventDefault(); goTo(current-1); }
+  e.preventDefault();
+  if (down) goTo(current+1); else goTo(current-1);
 });
 
 /* touch */
 let touchY=null;
 window.addEventListener('touchstart', e=>{ touchY=e.touches[0].clientY; }, {passive:true});
 window.addEventListener('touchend', e=>{
-  if (touchY===null||busy) return;
+  if (touchY===null) return;
   const dy = touchY - e.changedTouches[0].clientY;
-  if (Math.abs(dy)>40){ goTo(current + (dy>0?1:-1)); }
+  if (Math.abs(dy)<=40){ touchY=null; return; }
+  const dir = dy>0 ? 1 : -1;
+  if (loopActive){
+    const target = current + dir;
+    if (target < 0 || target >= SECTIONS.length){ touchY=null; return; }
+    cancelLoop();
+  }
+  if (busy){ touchY=null; return; }
+  goTo(current + dir);
   touchY=null;
 }, {passive:true});
 
@@ -393,6 +455,7 @@ function preloadAll(){
   for (let i=0;i<VIDEOS.length;i++){
     if (loaded[i]===0) loadVideo(i).then(checkPending);
   }
+  Object.values(LOOPS).forEach(loadLoop);
 }
 
 /* ============================================================
