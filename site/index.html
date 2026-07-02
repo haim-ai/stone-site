@@ -332,10 +332,12 @@ function draw(){
 }
 
 /* ============================================================
-   TRANSITION  — one scroll plays a clip over 5s linear, no fade.
-   Down (i -> i+1): plays the CURRENT clip forward (already on screen,
-   so the start is seamless), then cuts to the next section's poster.
-   Up   (i -> i-1): plays the destination clip in reverse to its poster.
+   TRANSITION  — plays through every clip between `from` and `dest`, linearly.
+   One step = 5s. Skipping sections adds 1s per extra step (1->2 = 5s,
+   1->3 = 6s, 1->4 = 7s ...), so multi-section jumps fly through all the
+   intermediate frames rather than cutting straight to the target.
+   Each boundary is owned by the lower-index clip: down plays it forward,
+   up plays it in reverse.
 ============================================================ */
 let pending = null;
 function checkPending(){
@@ -343,13 +345,22 @@ function checkPending(){
     const d = pending; pending = null; goTo(d);   // goTo re-queues if still not ready
   }
 }
+function setUI(sec){
+  titleEls.forEach((t,k)=> t.classList.toggle('active', k===sec));
+  dotEls.forEach((d,k)=> d.classList.toggle('on', k===sec));
+  curEl.textContent = '0'+(sec+1);
+}
 function goTo(dest){
   if (busy || dest===current || dest<0 || dest>=SECTIONS.length) return;
   const from = current;
   const down = dest > from;
-  const clip = down ? from : dest;        // clip that animates during the scroll (lower index)
-  // videos needed: the animating clip + the destination's resting clip
-  const need = [clip, restClip(dest)];
+  const steps = Math.abs(dest - from);
+  // ordered legs; `arrive` = the section reached after each leg
+  const legs = [];
+  if (down){ for (let k=from;   k<dest;  k++) legs.push({ clip:k, reverse:false, arrive:k+1 }); }
+  else     { for (let k=from-1; k>=dest; k--) legs.push({ clip:k, reverse:true,  arrive:k   }); }
+
+  const need = [...new Set([...legs.map(l=>l.clip), restClip(dest)])];
   if (need.some(v=> loaded[v] < FRAMES)){            // not ready -> queue, fire when loaded
     pending = dest;
     need.forEach(v=>{ if (loaded[v]===0) loadVideo(v).then(checkPending); });
@@ -357,38 +368,39 @@ function goTo(dest){
   }
   pending = null;
   busy = true;
+  cancelLoop();                                     // leaving a looping section, if any
   titleEls[from].classList.remove('active');
 
-  let t0 = null;
+  const total = DURATION + (steps-1)*1000;          // +1s per skipped section
+  const per = total / steps;
   const railBar = dotEls[dest].querySelector('.bar i');
+  let t0 = null, shown = -1;
   function step(ts){
     if (t0===null) t0 = ts;
-    let p = (ts - t0) / DURATION;          // 0..1 LINEAR
-    if (p>1) p=1;
-
-    // frame of the animating clip: forward on the way down, reverse on the way up
-    const fp = down ? p : 1 - p;
+    const elapsed = ts - t0;
+    let i = Math.floor(elapsed / per); if (i >= steps) i = steps-1;
+    const lp = Math.min(1, (elapsed - i*per) / per);   // progress within this leg
+    const leg = legs[i];
+    const fp = leg.reverse ? 1-lp : lp;
     frame = Math.min(FRAMES-1, Math.max(0, Math.round(fp*(FRAMES-1))));
 
     ctx.fillStyle='#000'; ctx.fillRect(0,0,vw,vh);
-    paint(store[clip][frame] || store[clip][0], 1);   // hard frames, no crossfade
+    paint(store[leg.clip][frame] || store[leg.clip][0], 1);   // hard frames, no crossfade
 
-    if (railBar) railBar.style.width = (p*100).toFixed(1)+'%';
+    if (railBar) railBar.style.width = (Math.min(1, elapsed/total)*100).toFixed(1)+'%';
 
-    // swap title/counter to destination near the end of the scroll
-    if (p>=0.55 && !titleEls[dest].classList.contains('active')){
-      titleEls.forEach((t,k)=> t.classList.toggle('active', k===dest));
-      dotEls.forEach((d,k)=> d.classList.toggle('on', k===dest));
-      curEl.textContent = '0'+(dest+1);
-    }
+    // single step: reveal the destination title as we arrive.
+    // multi-section skip: play only the video — no titles until we land.
+    if (steps===1 && lp>=0.5 && shown!==leg.arrive){ shown = leg.arrive; setUI(shown); }
 
-    if (p<1){ requestAnimationFrame(step); }
+    if (elapsed < total){ requestAnimationFrame(step); }
     else {
       current = dest;
       busy = false;
       if (railBar) railBar.style.width='0%';
+      setUI(dest);
       draw();
-      if (LOOPS[dest] && pending===null) playLoop(dest);   // section 4 / end -> loop
+      if (LOOPS[dest] && pending===null) playLoop(dest);   // loop section -> loop
       else checkPending();
     }
   }
