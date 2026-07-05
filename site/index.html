@@ -62,7 +62,7 @@
   .navmeta a:hover{opacity:.6}
 
   /* ===== Centered titles ===== */
-  #titles{position:fixed;inset:0;z-index:5;pointer-events:none}
+  #titles{position:fixed;inset:0;z-index:4;pointer-events:none}
   .title{position:absolute;inset:0;display:flex;flex-direction:column;
     align-items:center;justify-content:center;text-align:center;
     opacity:0;transition:opacity .6s ease}
@@ -119,7 +119,7 @@
   #loader .lpct{font-size:11px;letter-spacing:.3em;color:var(--ink-dim)}
 
   /* ===== Blink (eyelid) transition for non-adjacent jumps ===== */
-  #blink{position:fixed;inset:0;z-index:20;pointer-events:none}
+  #blink{position:fixed;inset:0;z-index:5;pointer-events:none}
   #blink .lid{position:absolute;left:0;right:0;height:62vh;
     transition:transform .55s cubic-bezier(.76,0,.24,1)}
   #blink .top{top:0;transform:translateY(-101%);
