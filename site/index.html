@@ -55,9 +55,7 @@
     color:#fff;text-shadow:0 1px 18px rgba(0,0,0,.5)}
   .logo{display:flex;align-items:center;gap:11px;letter-spacing:.42em;
     font-size:14px;font-weight:600;text-transform:uppercase;color:#fff}
-  .logo .mark{width:26px;height:26px;display:grid;place-items:center;
-    border:1.5px solid #fff;transform:rotate(45deg)}
-  .logo .mark i{display:block;width:7px;height:7px;background:#fff}
+  .logo .mark{height:30px;width:auto;display:block;fill:#fff}
   .navmeta{display:flex;gap:26px;font-size:11px;letter-spacing:.28em;
     text-transform:uppercase;color:#fff}
   .navmeta a{color:#fff;text-decoration:none;opacity:1;transition:opacity .3s}
@@ -120,6 +118,16 @@
   #loader .lbar i{display:block;height:100%;width:0%;background:var(--accent);transition:width .25s}
   #loader .lpct{font-size:11px;letter-spacing:.3em;color:var(--ink-dim)}
 
+  /* ===== Blink (eyelid) transition for non-adjacent jumps ===== */
+  #blink{position:fixed;inset:0;z-index:20;pointer-events:none}
+  #blink .lid{position:absolute;left:0;right:0;height:62vh;
+    transition:transform .55s cubic-bezier(.76,0,.24,1)}
+  #blink .top{top:0;transform:translateY(-101%);
+    background:linear-gradient(to bottom,#000 0%,#000 82%,transparent 100%)}
+  #blink .bot{bottom:0;transform:translateY(101%);
+    background:linear-gradient(to top,#000 0%,#000 82%,transparent 100%)}
+  #blink.closed .lid{transform:translateY(0)}
+
   @media (max-width:680px){
     .navmeta,.scrollhint span{display:none}
     .rail{right:calc(var(--frame) + 8px)}
@@ -140,7 +148,7 @@
 
   <!-- top bar -->
   <header class="topbar">
-    <div class="logo"><span class="mark"><i></i></span><span>STONE</span></div>
+    <div class="logo"><svg class="mark" viewBox="0 0 581.8 773.4" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M317.6,732.8l224.3-221.7-37.2-294.8L319.4,40.6,54.8,297.5l-14.9,301.9,277.6,133.4ZM358.2,226.7l-23.3-142.1,136,129-112.7,13.1ZM337.4,230.3l-238.2,53.7,213.2-207,25.1,153.3ZM72.8,323.1l203.8,172,25.8,208.3-239.4-117.2,9.8-263.1ZM298.6,501.2l208.1,15-183.7,181.5-24.4-196.5ZM518.6,495.8l-227.9-16.4-202.8-171.2,263.3-59.4,134.3-15.6,33.2,262.6Z"/></svg><span>STONE</span></div>
     <nav class="navmeta">
       <a href="#">Studio</a><a href="#">Work</a><a href="#">Contact</a>
     </nav>
@@ -157,6 +165,9 @@
     <div class="counter"><span class="cur" id="cur">01</span><span class="tot">/ 05</span></div>
     <div class="scrollhint"><span>Scroll</span><span class="mouse"></span></div>
   </footer>
+
+  <!-- blink (eyelid) transition -->
+  <div id="blink"><span class="lid top"></span><span class="lid bot"></span></div>
 
   <!-- loader -->
   <div id="loader">
@@ -205,6 +216,7 @@ const curEl = document.getElementById('cur');
 const loader = document.getElementById('loader');
 const lbarfill = document.getElementById('lbarfill');
 const lpct = document.getElementById('lpct');
+const blinkEl = document.getElementById('blink');
 
 /* build titles + rail */
 SECTIONS.forEach((s,i)=>{
@@ -332,12 +344,11 @@ function draw(){
 }
 
 /* ============================================================
-   TRANSITION  — plays through every clip between `from` and `dest`, linearly.
-   One step = 5s. Skipping sections adds 1s per extra step (1->2 = 5s,
-   1->3 = 6s, 1->4 = 7s ...), so multi-section jumps fly through all the
-   intermediate frames rather than cutting straight to the target.
-   Each boundary is owned by the lower-index clip: down plays it forward,
-   up plays it in reverse.
+   TRANSITION
+   - Adjacent step (scroll / neighbouring menu item): a 5s linear camera move
+     through that boundary clip (forward going down, reverse going up).
+   - Non-adjacent jump (menu to a far room): a "blink" cut (see blinkTo) — no
+     fly-through, the room is swapped behind closing black eyelids.
 ============================================================ */
 let pending = null;
 function checkPending(){
@@ -350,11 +361,44 @@ function setUI(sec){
   dotEls.forEach((d,k)=> d.classList.toggle('on', k===sec));
   curEl.textContent = '0'+(sec+1);
 }
+
+// Blink (eyelid) cut — used for non-adjacent menu jumps: black closes in from
+// top & bottom, we swap to the new room while it's black, then it opens.
+const BLINK_MS = 560;   // matches the CSS transition (.55s)
+function blinkTo(dest){
+  busy = true;
+  cancelLoop();
+  titleEls[current].classList.remove('active');
+  blinkEl.classList.add('closed');                 // eyelids close
+  setTimeout(()=>{
+    current = dest;                                // swap room while black
+    setUI(dest);
+    draw();
+    if (LOOPS[dest]) playLoop(dest);
+    blinkEl.classList.remove('closed');            // eyelids open
+    setTimeout(()=>{ busy = false; if (!LOOPS[dest]) checkPending(); }, BLINK_MS);
+  }, BLINK_MS + 70);
+}
+
 function goTo(dest){
   if (busy || dest===current || dest<0 || dest>=SECTIONS.length) return;
   const from = current;
   const down = dest > from;
   const steps = Math.abs(dest - from);
+
+  // non-adjacent jump (menu) -> blink cut instead of flying through the clips
+  if (steps > 1){
+    const poster = restClip(dest);
+    if (loaded[poster] < FRAMES){
+      pending = dest;
+      if (loaded[poster]===0) loadVideo(poster).then(checkPending);
+      return;
+    }
+    pending = null;
+    blinkTo(dest);
+    return;
+  }
+
   // ordered legs; `arrive` = the section reached after each leg
   const legs = [];
   if (down){ for (let k=from;   k<dest;  k++) legs.push({ clip:k, reverse:false, arrive:k+1 }); }
